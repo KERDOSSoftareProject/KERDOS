@@ -1,8 +1,8 @@
 import { useState, useEffect, useMemo } from "react";
 import { createClient } from "@supabase/supabase-js";
 
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
-const SUPABASE_KEY = import.meta.env.VITE_SUPABASE_KEY;
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || "https://antpbtorhqghrjqzftub.supabase.co";
+const SUPABASE_KEY = import.meta.env.VITE_SUPABASE_KEY || "sb_publishable_FQxGcfLMEo5K8iBLa7h2dA_eeaB7-W6";
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 // ── UTILITIES ────────────────────────────────────────────────────────
