@@ -1,9 +1,10 @@
 import { useState, useEffect, useMemo } from "react";
 import { createClient } from "@supabase/supabase-js";
 
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || "https://antpbtorhqghrjqzftub.supabase.co";
-const SUPABASE_KEY = import.meta.env.VITE_SUPABASE_KEY || "sb_publishable_FQxGcfLMEo5K8iBLa7h2dA_eeaB7-W6";
-const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+const supabase = createClient(
+  "https://antpbtorhqghrjqzftub.supabase.co",
+  "sb_publishable_FQxGcfLMEo5K8iBLa7h2dA_eeaB7-W6"
+);
 
 // ── UTILITIES ────────────────────────────────────────────────────────
 function r2(n) { return Math.round(n * 100) / 100; }
