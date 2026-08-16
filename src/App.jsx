@@ -955,7 +955,7 @@ export default function App() {
         )}
       </div>
 
-      {showPaste&&<PasteModal vendors={vendors} orgId={org.id} onClose={()=>setShowPaste(false)} onDone={loadData} />}
+      {showPaste&&<PasteModal vendors={vendors} orgId={org.id} onClose={()=>setShowPaste(false)} onDone={loadData} initialVendorId={selectedVendorId} />}
     </div>
   );
 }
