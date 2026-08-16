@@ -331,7 +331,7 @@ function Setup({user,onComplete}) {
 }
 
 // ── PASTE MODAL ───────────────────────────────────────────────────────
-function PasteModal({vendors,orgId,onClose,onDone}) {
+function PasteModal({vendors,orgId,onClose,onDone,initialVendorId}) {
   const [vendorId,setVendorId]=useState(vendors[0]?.id||"");
   const [mode,setMode]=useState("pricelist");
   const [text,setText]=useState("");
