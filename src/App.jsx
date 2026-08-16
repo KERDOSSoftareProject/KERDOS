@@ -188,8 +188,7 @@ function Login() {
 
   async function submit(e) {
     e.preventDefault(); setLoading(true); setError("");
-    const fn = mode==="login" ? supabase.auth.signInWithPassword : supabase.auth.signUp;
-    const {error:err} = await fn({email,password});
+    const {error:err} = mode==="login" ? await supabase.auth.signInWithPassword({email,password}) : await supabase.auth.signUp({email,password});
     if(err) setError(err.message);
     else if(mode==="signup") setError("Check your email to confirm, then sign in.");
     setLoading(false);
