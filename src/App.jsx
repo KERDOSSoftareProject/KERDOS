@@ -6,6 +6,31 @@ const supabase = createClient(
   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFudHBidG9yaHFnaHJqcXpmdHViIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQyOTMxMjMsImV4cCI6MjA5OTg2OTEyM30.vt4tdD7IaUKalzmpQrl5vD_hBb1lCOdu7D_LooC8qOQ"
 );
 
+function loadFileLib() {
+  return new Promise((resolve, reject) => {
+    if (window.XLSX) { resolve(window.XLSX); return; }
+    const script = document.createElement("script");
+    script.src = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
+    script.onload = () => resolve(window.XLSX);
+    script.onerror = reject;
+    document.head.appendChild(script);
+  });
+}
+
+async function fileToText(file) {
+  const name = file.name.toLowerCase();
+  if (name.endsWith(".xlsx") || name.endsWith(".xls")) {
+    const XLSX = await loadFileLib();
+    const buf = await file.arrayBuffer();
+    const wb = XLSX.read(buf, { type: "array" });
+    const sheet = wb.Sheets[wb.SheetNames[0]];
+    return XLSX.utils.sheet_to_csv(sheet);
+  }
+  if (name.endsWith(".pdf")) {
+    throw new Error("PDF files aren't supported yet — please open it and copy/paste the text instead.");
+  }
+  return await file.text();
+}
 // ── UTILITIES ────────────────────────────────────────────────────────
 function r2(n) { return Math.round(n * 100) / 100; }
 
@@ -314,6 +339,21 @@ function PasteModal({vendors,orgId,onClose,onDone}) {
   const [step,setStep]=useState(1);
   const [loading,setLoading]=useState(false);
   const [result,setResult]=useState(null);
+  const [dragOver,setDragOver]=useState(false);
+  const [fileBusy,setFileBusy]=useState(false);
+
+  async function handleDroppedFiles(files){
+    const file=files[0];
+    if(!file) return;
+    setFileBusy(true);
+    try{
+      const content=await fileToText(file);
+      setText(content);
+    }catch(err){
+      alert(err.message);
+    }
+    setFileBusy(false);
+  }
 
   function doParse(){setParsed(parsePasted(text));setStep(2);}
 
@@ -372,10 +412,21 @@ function PasteModal({vendors,orgId,onClose,onDone}) {
             </select>
           </div>
           <div style={{marginBottom:14}}>
-            <div style={{fontSize:12,fontWeight:600,color:"#666",marginBottom:4}}>Paste {mode==="pricelist"?"price list":"invoice"} here</div>
-            <textarea style={{...inp,height:200,resize:"vertical",fontFamily:"monospace",fontSize:12}}
-              value={text} onChange={e=>setText(e.target.value)}
-              placeholder="Copy from Excel, email, PDF — paste here..." />
+            <div style={{fontSize:12,fontWeight:600,color:"#666",marginBottom:4}}>Paste {mode==="pricelist"?"price list":"invoice"} here, or drag a file in</div>
+            <div
+              onDragOver={e=>{e.preventDefault();setDragOver(true);}}
+              onDragLeave={()=>setDragOver(false)}
+              onDrop={e=>{e.preventDefault();setDragOver(false);handleDroppedFiles(e.dataTransfer.files);}}
+              style={{position:"relative"}}
+            >
+              <textarea style={{...inp,height:200,resize:"vertical",fontFamily:"monospace",fontSize:12,border:dragOver?"2px dashed #003584":inp.border}}
+                value={text} onChange={e=>setText(e.target.value)}
+                placeholder="Copy from Excel, email, PDF — paste here, or drag a file..." />
+              {fileBusy&&<div style={{position:"absolute",inset:0,background:"rgba(255,255,255,0.85)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:13,color:"#003584",fontWeight:700,borderRadius:8}}>Reading file...</div>}
+              <input type="file" accept=".csv,.txt,.tsv,.xlsx,.xls"
+                onChange={e=>handleDroppedFiles(e.target.files)}
+                style={{marginTop:8,fontSize:12}} />
+            </div>
           </div>
           <button onClick={doParse} disabled={text.length<10} style={{...btn("#003584"),width:"100%"}}>
             Parse ({text.split("\n").filter(l=>l.trim()).length} lines)
