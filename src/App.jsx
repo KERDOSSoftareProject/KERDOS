@@ -17,20 +17,30 @@ function loadFileLib() {
   });
 }
 
-async function fileToText(file) {
-  const name = file.name.toLowerCase();
-  if (name.endsWith(".xlsx") || name.endsWith(".xls")) {
-    const XLSX = await loadFileLib();
-    const buf = await file.arrayBuffer();
-    const wb = XLSX.read(buf, { type: "array" });
-    const sheet = wb.Sheets[wb.SheetNames[0]];
-    return XLSX.utils.sheet_to_csv(sheet);
-  }
-  if (name.endsWith(".pdf")) {
-    throw new Error("PDF files aren't supported yet — please open it and copy/paste the text instead.");
-  }
-  return await file.text();
+function loadScript(src, globalName) {
+  return new Promise((resolve, reject) => {
+    if (window[globalName]) { resolve(window[globalName]); return; }
+    const script = document.createElement("script");
+    script.src = src;
+    script.onload = () => resolve(window[globalName]);
+    script.onerror = reject;
+    document.head.appendChild(script);
+  });
 }
+
+async function extractPdfText(file) {
+  const pdfjsLib = await loadScript(
+    "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js", "pdfjsLib"
+  );
+  pdfjsLib.GlobalWorkerOptions.workerSrc =
+    "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+  const buf = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+
+  let fullText = "";
+  for (let i = 1; i <= pdf.numPages; i++) {
+    const page = await pdf.getPage(i);
+    const content = await
 // ── UTILITIES ────────────────────────────────────────────────────────
 function r2(n) { return Math.round(n * 100) / 100; }
 
