@@ -907,7 +907,7 @@ export default function App() {
               <div style={{fontSize:36,marginBottom:8}}>📋</div>
               <h3 style={{margin:"0 0 6px"}}>Import Price List or Invoice</h3>
               <p style={{color:"#888",fontSize:13,margin:"0 0 16px"}}>Copy from email, Excel, or any format and paste it in</p>
-              <button onClick={()=>setShowPaste(true)} style={{...btn("#003584")}}>Open Import Tool</button>
+              <button onClick={()=>{setSelectedVendorId(null);setShowPaste(true);}} style={{...btn("#003584")}}>Open Import Tool</button>
             </div>
             <div style={{background:"white",borderRadius:10,padding:16,boxShadow:"0 1px 3px rgba(0,0,0,0.08)"}}>
               <h4 style={{margin:"0 0 12px",fontSize:14}}>Your Vendors</h4>
