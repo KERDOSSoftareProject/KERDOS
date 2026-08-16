@@ -484,6 +484,7 @@ export default function App() {
   const [quantities,setQuantities]=useState({}); // {catalogItemId_case: n, catalogItemId_each: n}
   const [tab,setTab]=useState("order");
   const [showPaste,setShowPaste]=useState(false);
+  const [selectedVendorId,setSelectedVendorId]=useState(null);
   const [expandedItem,setExpandedItem]=useState(null);
   const [search,setSearch]=useState("");
   const [loading,setLoading]=useState(true);
