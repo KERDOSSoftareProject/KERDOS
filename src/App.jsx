@@ -40,7 +40,47 @@ async function extractPdfText(file) {
   let fullText = "";
   for (let i = 1; i <= pdf.numPages; i++) {
     const page = await pdf.getPage(i);
-    const content = await
+    const content = await page.getTextContent();
+    const pageText = content.items.map(it => it.str).join(" ");
+    fullText += pageText + "\n";
+  }
+
+  if (fullText.trim().length > 40) {
+    return fullText;
+  }
+
+  await loadScript(
+    "https://cdnjs.cloudflare.com/ajax/libs/tesseract.js/4.1.1/tesseract.min.js", "Tesseract"
+  );
+  let ocrText = "";
+  for (let i = 1; i <= pdf.numPages; i++) {
+    const page = await pdf.getPage(i);
+    const viewport = page.getViewport({ scale: 2 });
+    const canvas = document.createElement("canvas");
+    canvas.width = viewport.width;
+    canvas.height = viewport.height;
+    const ctx = canvas.getContext("2d");
+    await page.render({ canvasContext: ctx, viewport }).promise;
+    const { data: { text } } = await window.Tesseract.recognize(canvas, "eng");
+    ocrText += text + "\n";
+  }
+  return ocrText;
+}
+
+async function fileToText(file) {
+  const name = file.name.toLowerCase();
+  if (name.endsWith(".xlsx") || name.endsWith(".xls")) {
+    const XLSX = await loadFileLib();
+    const buf = await file.arrayBuffer();
+    const wb = XLSX.read(buf, { type: "array" });
+    const sheet = wb.Sheets[wb.SheetNames[0]];
+    return XLSX.utils.sheet_to_csv(sheet);
+  }
+  if (name.endsWith(".pdf")) {
+    return await extractPdfText(file);
+  }
+  return await file.text();
+}
 // ── UTILITIES ────────────────────────────────────────────────────────
 function r2(n) { return Math.round(n * 100) / 100; }
 
