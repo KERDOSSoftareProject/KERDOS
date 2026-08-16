@@ -920,7 +920,7 @@ export default function App() {
                       <div style={{fontWeight:700,color:vc.accent}}>{v.name}</div>
                       <div style={{fontSize:11,color:"#888"}}>{count} items · Min ${v.delivery_minimum_dollar||0}</div>
                     </div>
-                    <button onClick={()=>setShowPaste(true)} style={{...btn(vc.accent,"white",{fontSize:12,padding:"6px 12px"})}}>Import</button>
+                    <button onClick={()=>{setSelectedVendorId(v.id);setShowPaste(true);}} style={{...btn(vc.accent,"white",{fontSize:12,padding:"6px 12px"})}}>Import</button>
                   </div>
                 );
               })}
