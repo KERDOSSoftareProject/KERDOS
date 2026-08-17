@@ -473,7 +473,7 @@ function PasteModal({vendors,orgId,onClose,onDone,initialVendorId}) {
                 value={text} onChange={e=>setText(e.target.value)}
                 placeholder="Copy from Excel, email, PDF — paste here, or drag a file..." />
               {fileBusy&&<div style={{position:"absolute",inset:0,background:"rgba(255,255,255,0.85)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:13,color:"#003584",fontWeight:700,borderRadius:8}}>Reading file...</div>}
-              <input type="file" accept=".csv,.txt,.tsv,.xlsx,.xls"
+              <input type="file" accept=".csv,.txt,.tsv,.xlsx,.xls,.pdf"
                 onChange={e=>handleDroppedFiles(e.target.files)}
                 style={{marginTop:8,fontSize:12}} />
             </div>
