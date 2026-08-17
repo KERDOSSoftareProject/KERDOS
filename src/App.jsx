@@ -468,8 +468,11 @@ function PasteModal({vendors,orgId,onClose,onDone,initialVendorId}) {
               onDragLeave={()=>setDragOver(false)}
               onDrop={e=>{e.preventDefault();setDragOver(false);handleDroppedFiles(e.dataTransfer.files);}}
               style={{position:"relative"}}
-            >
-              <textarea style={{...inp,height:200,resize:"vertical",fontFamily:"monospace",fontSize:12,border:dragOver?"2px dashed #003584":inp.border}}
+            ><textarea
+                onDragOver={e=>{e.preventDefault();e.stopPropagation();setDragOver(true);}}
+                onDragLeave={()=>setDragOver(false)}
+                onDrop={e=>{e.preventDefault();e.stopPropagation();setDragOver(false);handleDroppedFiles(e.dataTransfer.files);}}
+                style={{...inp,height:200,resize:"vertical",fontFamily:"monospace",fontSize:12,border:dragOver?"2px dashed #003584":inp.border}}
                 value={text} onChange={e=>setText(e.target.value)}
                 placeholder="Copy from Excel, email, PDF — paste here, or drag a file..." />
               {fileBusy&&<div style={{position:"absolute",inset:0,background:"rgba(255,255,255,0.85)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:13,color:"#003584",fontWeight:700,borderRadius:8}}>Reading file...</div>}
