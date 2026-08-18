@@ -226,7 +226,7 @@ function solve(cartItems, vendors) {
 
 // ── PARSE PASTED TEXT ────────────────────────────────────────────────
 function extractNumbers(str) {
-  const numRe = /\$?\d{1,3}(?:,\d{3})*(?:\.\d{1,2})?/g;
+  const numRe = /\$?\d{1,3}(?:,\d{3})*\.\d{2}\b/g;
   return [...str.matchAll(numRe)].map(m => ({
     value: parseFloat(m[0].replace(/[$,]/g, "")),
     index: m.index,
