@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from "react";
-import { createClient } from "@supabase/supabase-js";
+import { createClient } from "@supabase/supabase-js";import { parseDocument } from "./ingestion.js";
 
 const supabase = createClient(
   "https://antpbtorhqghrjqzftub.supabase.co",
@@ -233,59 +233,6 @@ function extractNumbers(str) {
   }));
 }
 
-function parsePasted(text) {
-  const lines = text.split("\n").map(l=>l.trim()).filter(l=>l.length>4);
-  const rows = [];
-  for (const line of lines) {
-    let cells = line.split(/\t|,(?=(?:[^"]*"[^"]*")*[^"]*$)/).map(c=>c.trim().replace(/^"|"$/g,""));
-    if (cells.length < 2) {
-      cells = line.split(/\s{2,}/).map(c=>c.trim()).filter(Boolean);
-    }
-
-    if (cells.length >= 2) {
-      let price=null,priceIdx=-1;
-      for (let i=cells.length-1;i>=0;i--) {
-        const n=parseFloat(cells[i].replace(/[$,]/g,""));
-        if(!isNaN(n)&&n>0&&n<100000){price=n;priceIdx=i;break;}
-      }
-      if (price) {
-        let code=null,descIdx=0;
-        for (let i=0;i<Math.min(3,cells.length);i++) {
-          if(/^[A-Z0-9\-]{3,12}$/i.test(cells[i])&&cells[i]!==cells[priceIdx]){code=cells[i];descIdx=i+1;break;}
-        }
-        let desc="";
-        for (let i=descIdx;i<priceIdx;i++){if(cells[i].length>desc.length&&!/^\d+\.?\d*$/.test(cells[i]))desc=cells[i];}
-        if(!desc)desc=cells[0];
-        if(desc.length>=3){
-          let size=null;
-          for(let i=descIdx;i<priceIdx;i++){if(/\d+\s*(lb|oz|gal|ct|cs|ea|qt|pt|ft)/i.test(cells[i])||/^\d+\/\d+/.test(cells[i])){size=cells[i];break;}}
-          let amount=null;
-          for (let i=priceIdx+1;i<cells.length;i++){
-            const n=parseFloat(cells[i].replace(/[$,]/g,""));
-            if(!isNaN(n)&&n>0&&n<1000000){amount=n;break;}
-          }
-          rows.push({code,description:desc.slice(0,80),packSize:size,price,amount});
-          continue;
-        }
-      }
-    }
-
-    const nums = extractNumbers(line);
-    if (nums.length === 0) continue;
-    const amount = nums[nums.length-1].value;
-    const price = nums.length >= 2 ? nums[nums.length-2].value : amount;
-    if (price <= 0 || price > 1000000) continue;
-    const cutoff = nums.length >= 2 ? nums[nums.length-2].index : nums[nums.length-1].index;
-    let desc = line.slice(0, cutoff).trim();
-    desc = desc.replace(/^\d+(\.\d+)?\s+/, "").trim();
-    let code=null;
-    const codeMatch=desc.match(/^([A-Z0-9\-]{3,12})\s+/);
-    if(codeMatch){code=codeMatch[1];desc=desc.slice(codeMatch[0].length).trim();}
-    if (desc.length < 3) continue;
-    rows.push({code, description: desc.slice(0,80), packSize:null, price, amount});
-  }
-  return rows;
-}
 
 // ── STYLES ───────────────────────────────────────────────────────────
 const PALETTE = [
@@ -431,7 +378,7 @@ function PasteModal({vendors,orgId,onClose,onDone,initialVendorId}) {
   const [vendorId,setVendorId]=useState(initialVendorId||vendors[0]?.id||"");
   const [mode,setMode]=useState("pricelist");
   const [text,setText]=useState("");
-  const [parsed,setParsed]=useState([]);
+  const [parsed,setParsed]=useState([]);  const [skipped,setSkipped]=useState([]);
   const [step,setStep]=useState(1);
   const [loading,setLoading]=useState(false);
   const [result,setResult]=useState(null);
@@ -451,7 +398,12 @@ function PasteModal({vendors,orgId,onClose,onDone,initialVendorId}) {
     setFileBusy(false);
   }
 
-  function doParse(){setParsed(parsePasted(text));setStep(2);}
+  function doParse(){
+    const result = parseDocument(text);
+    setParsed(result.rows);
+    setSkipped(result.skipped);
+    setStep(2);
+  }
 
   async function doSave(){
     setLoading(true);
@@ -548,6 +500,18 @@ function PasteModal({vendors,orgId,onClose,onDone,initialVendorId}) {
               </div>
             ))}
           </div>
+                   {skipped.length>0&&(
+            <div style={{background:"#FFF3E0",padding:"10px 14px",borderRadius:8,marginBottom:14,fontSize:12}}>
+              <div style={{fontWeight:700,color:"#E65100",marginBottom:6}}>{skipped.length} line{skipped.length>1?"s":""} couldn't be read — skipped, not saved</div>
+              <div style={{maxHeight:120,overflowY:"auto"}}>
+                {skipped.map((s,i)=>(
+                  <div key={i} style={{color:"#999",marginBottom:3,fontFamily:"monospace",fontSize:11}}>
+                    "{s.line.slice(0,60)}" — {s.reason}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
           <div style={{display:"flex",gap:8}}>
             <button onClick={()=>setStep(1)} style={{...btn("#EEE","#555"),flex:1}}>← Back</button>
             <button onClick={doSave} disabled={loading||!parsed.length} style={{...btn("#003584"),flex:2}}>
