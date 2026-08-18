@@ -225,29 +225,64 @@ function solve(cartItems, vendors) {
 }
 
 // ── PARSE PASTED TEXT ────────────────────────────────────────────────
+function extractNumbers(str) {
+  const numRe = /\$?\d{1,3}(?:,\d{3})*(?:\.\d{1,2})?/g;
+  return [...str.matchAll(numRe)].map(m => ({
+    value: parseFloat(m[0].replace(/[$,]/g, "")),
+    index: m.index,
+  }));
+}
+
 function parsePasted(text) {
   const lines = text.split("\n").map(l=>l.trim()).filter(l=>l.length>4);
   const rows = [];
   for (const line of lines) {
-    const cells = line.split(/\t|,(?=(?:[^"]*"[^"]*")*[^"]*$)/).map(c=>c.trim().replace(/^"|"$/g,""));
-    if (cells.length < 2) continue;
-    let price=null,priceIdx=-1;
-    for (let i=cells.length-1;i>=0;i--) {
-      const n=parseFloat(cells[i].replace(/[$,]/g,""));
-      if(!isNaN(n)&&n>0&&n<100000){price=n;priceIdx=i;break;}
+    let cells = line.split(/\t|,(?=(?:[^"]*"[^"]*")*[^"]*$)/).map(c=>c.trim().replace(/^"|"$/g,""));
+    if (cells.length < 2) {
+      cells = line.split(/\s{2,}/).map(c=>c.trim()).filter(Boolean);
     }
-    if (!price) continue;
-    let code=null,descIdx=0;
-    for (let i=0;i<Math.min(3,cells.length);i++) {
-      if(/^[A-Z0-9\-]{3,12}$/i.test(cells[i])&&cells[i]!==cells[priceIdx]){code=cells[i];descIdx=i+1;break;}
+
+    if (cells.length >= 2) {
+      let price=null,priceIdx=-1;
+      for (let i=cells.length-1;i>=0;i--) {
+        const n=parseFloat(cells[i].replace(/[$,]/g,""));
+        if(!isNaN(n)&&n>0&&n<100000){price=n;priceIdx=i;break;}
+      }
+      if (price) {
+        let code=null,descIdx=0;
+        for (let i=0;i<Math.min(3,cells.length);i++) {
+          if(/^[A-Z0-9\-]{3,12}$/i.test(cells[i])&&cells[i]!==cells[priceIdx]){code=cells[i];descIdx=i+1;break;}
+        }
+        let desc="";
+        for (let i=descIdx;i<priceIdx;i++){if(cells[i].length>desc.length&&!/^\d+\.?\d*$/.test(cells[i]))desc=cells[i];}
+        if(!desc)desc=cells[0];
+        if(desc.length>=3){
+          let size=null;
+          for(let i=descIdx;i<priceIdx;i++){if(/\d+\s*(lb|oz|gal|ct|cs|ea|qt|pt|ft)/i.test(cells[i])||/^\d+\/\d+/.test(cells[i])){size=cells[i];break;}}
+          let amount=null;
+          for (let i=priceIdx+1;i<cells.length;i++){
+            const n=parseFloat(cells[i].replace(/[$,]/g,""));
+            if(!isNaN(n)&&n>0&&n<1000000){amount=n;break;}
+          }
+          rows.push({code,description:desc.slice(0,80),packSize:size,price,amount});
+          continue;
+        }
+      }
     }
-    let desc="";
-    for (let i=descIdx;i<priceIdx;i++){if(cells[i].length>desc.length&&!/^\d+\.?\d*$/.test(cells[i]))desc=cells[i];}
-    if(!desc)desc=cells[0];
-    if(desc.length<3)continue;
-    let size=null;
-    for(let i=descIdx;i<priceIdx;i++){if(/\d+\s*(lb|oz|gal|ct|cs|ea|qt|pt|ft)/i.test(cells[i])||/^\d+\/\d+/.test(cells[i])){size=cells[i];break;}}
-    rows.push({code,description:desc.slice(0,80),packSize:size,price});
+
+    const nums = extractNumbers(line);
+    if (nums.length === 0) continue;
+    const amount = nums[nums.length-1].value;
+    const price = nums.length >= 2 ? nums[nums.length-2].value : amount;
+    if (price <= 0 || price > 1000000) continue;
+    const cutoff = nums.length >= 2 ? nums[nums.length-2].index : nums[nums.length-1].index;
+    let desc = line.slice(0, cutoff).trim();
+    desc = desc.replace(/^\d+(\.\d+)?\s+/, "").trim();
+    let code=null;
+    const codeMatch=desc.match(/^([A-Z0-9\-]{3,12})\s+/);
+    if(codeMatch){code=codeMatch[1];desc=desc.slice(codeMatch[0].length).trim();}
+    if (desc.length < 3) continue;
+    rows.push({code, description: desc.slice(0,80), packSize:null, price, amount});
   }
   return rows;
 }
