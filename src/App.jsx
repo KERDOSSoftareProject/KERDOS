@@ -37,12 +37,23 @@ async function extractPdfText(file) {
   const buf = await file.arrayBuffer();
   const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
 
-  let fullText = "";
+    let fullText = "";
   for (let i = 1; i <= pdf.numPages; i++) {
     const page = await pdf.getPage(i);
     const content = await page.getTextContent();
-    const pageText = content.items.map(it => it.str).join(" ");
-    fullText += pageText + "\n";
+    const lineGroups = [];
+    for (const it of content.items) {
+      const y = it.transform[5];
+      const x = it.transform[4];
+      let group = lineGroups.find(g => Math.abs(g.y - y) < 3);
+      if (!group) { group = { y, words: [] }; lineGroups.push(group); }
+      group.words.push({ x, str: it.str });
+    }
+    lineGroups.sort((a, b) => b.y - a.y);
+    for (const group of lineGroups) {
+      group.words.sort((a, b) => a.x - b.x);
+      fullText += group.words.map(w => w.str).join(" ") + "\n";
+    }
   }
 
   if (fullText.trim().length > 40) {
