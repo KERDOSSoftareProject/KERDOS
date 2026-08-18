@@ -475,7 +475,7 @@ function PasteModal({vendors,orgId,onClose,onDone,initialVendorId}) {
           created++;
         }
       } else {
-        invoiceTotal+=row.price;
+        invoiceTotal+=(row.amount!=null?row.amount:row.price);
       }
     }
     if(mode==="invoice"){
