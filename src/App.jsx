@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo } from "react";
-import { createClient } from "@supabase/supabase-js";import { parseDocument } from "./ingestion.js";
+import { createClient } from "@supabase/supabase-js";
+import { parseDocument } from "./ingestion.js";
 
 const supabase = createClient(
   "https://antpbtorhqghrjqzftub.supabase.co",
@@ -37,7 +38,7 @@ async function extractPdfText(file) {
   const buf = await file.arrayBuffer();
   const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
 
-    let fullText = "";
+  let fullText = "";
   for (let i = 1; i <= pdf.numPages; i++) {
     const page = await pdf.getPage(i);
     const content = await page.getTextContent();
@@ -92,6 +93,24 @@ async function fileToText(file) {
   }
   return await file.text();
 }
+
+// ── FILE STORAGE ────────────────────────────────────────────────────
+// Uploads the original, untouched file to Supabase Storage so it can
+// be reopened later exactly as it was received — separate from
+// whatever data got extracted from it.
+async function uploadOriginalFile(orgId, vendorId, file) {
+  const path = `${orgId}/${vendorId}/${Date.now()}_${file.name}`;
+  const { error } = await supabase.storage.from("documents").upload(path, file);
+  if (error) return { path: null, name: null, error };
+  return { path, name: file.name, error: null };
+}
+
+async function viewStoredFile(path) {
+  const { data, error } = await supabase.storage.from("documents").createSignedUrl(path, 3600);
+  if (error) { alert("Couldn't open file: " + error.message); return; }
+  window.open(data.signedUrl, "_blank");
+}
+
 // ── UTILITIES ────────────────────────────────────────────────────────
 function r2(n) { return Math.round(n * 100) / 100; }
 
@@ -223,16 +242,6 @@ function solve(cartItems, vendors) {
   }
   return assignments;
 }
-
-// ── PARSE PASTED TEXT ────────────────────────────────────────────────
-function extractNumbers(str) {
-  const numRe = /\$?\d{1,3}(?:,\d{3})*\.\d{2}\b/g;
-  return [...str.matchAll(numRe)].map(m => ({
-    value: parseFloat(m[0].replace(/[$,]/g, "")),
-    index: m.index,
-  }));
-}
-
 
 // ── STYLES ───────────────────────────────────────────────────────────
 const PALETTE = [
@@ -374,11 +383,13 @@ function Setup({user,onComplete}) {
 }
 
 // ── PASTE MODAL ───────────────────────────────────────────────────────
-function PasteModal({vendors,orgId,onClose,onDone,initialVendorId}) {
+function PasteModal({vendors,orgId,onClose,onDone,initialVendorId,initialMode}) {
   const [vendorId,setVendorId]=useState(initialVendorId||vendors[0]?.id||"");
-  const [mode,setMode]=useState("pricelist");
+  const [mode,setMode]=useState(initialMode||"pricelist");
   const [text,setText]=useState("");
-  const [parsed,setParsed]=useState([]);  const [skipped,setSkipped]=useState([]);
+  const [parsed,setParsed]=useState([]);
+  const [skipped,setSkipped]=useState([]);
+  const [rawFile,setRawFile]=useState(null);
   const [step,setStep]=useState(1);
   const [loading,setLoading]=useState(false);
   const [result,setResult]=useState(null);
@@ -388,6 +399,7 @@ function PasteModal({vendors,orgId,onClose,onDone,initialVendorId}) {
   async function handleDroppedFiles(files){
     const file=files[0];
     if(!file) return;
+    setRawFile(file);
     setFileBusy(true);
     try{
       const content=await fileToText(file);
@@ -409,6 +421,8 @@ function PasteModal({vendors,orgId,onClose,onDone,initialVendorId}) {
     setLoading(true);
     const vendor=vendors.find(v=>v.id===vendorId);
     let updated=0,created=0,invoiceTotal=0;
+    let saveError=null;
+
     for(const row of parsed){
       if(mode==="pricelist"){
         const q=row.code
@@ -430,13 +444,41 @@ function PasteModal({vendors,orgId,onClose,onDone,initialVendorId}) {
         invoiceTotal+=(row.amount!=null?row.amount:row.price);
       }
     }
-    if(mode==="invoice"){
-      const {data:inv}=await supabase.from("invoices").insert({organization_id:orgId,vendor_id:vendorId,total_amount:r2(invoiceTotal),raw_text:text,invoice_date:new Date().toISOString().split("T")[0],status:"recorded"}).select().single();
-      if(inv){
-        await supabase.from("invoice_lines").insert(parsed.map(row=>({invoice_id:inv.id,vendor_item_code:row.code,description:row.description,unit_price:row.price,line_total:row.price})));
+
+    // Upload the original file, unaltered, so it can be reopened later
+    // exactly as received — separate from whatever data was extracted.
+    let filePath=null, fileName=null;
+    if(mode==="invoice" && rawFile){
+      const upload = await uploadOriginalFile(orgId, vendorId, rawFile);
+      if(upload.error){
+        saveError = "Data was extracted, but the original file couldn't be saved: " + upload.error.message;
+      } else {
+        filePath = upload.path;
+        fileName = upload.name;
       }
     }
-    setResult({mode,vendor:vendor?.name,updated,created,invoiceTotal:r2(invoiceTotal),count:parsed.length});
+
+    if(mode==="invoice"){
+      const {data:inv,error:invErr}=await supabase.from("invoices").insert({
+        organization_id:orgId, vendor_id:vendorId, total_amount:r2(invoiceTotal),
+        raw_text:text, invoice_date:new Date().toISOString().split("T")[0], status:"recorded",
+        file_path:filePath, file_name:fileName,
+      }).select().single();
+
+      if(invErr){
+        saveError = (saveError?saveError+" ":"") + "Couldn't save this invoice: " + invErr.message;
+      } else if(inv){
+        const {error:linesErr}=await supabase.from("invoice_lines").insert(parsed.map(row=>({
+          invoice_id:inv.id, vendor_item_code:row.code, description:row.description,
+          unit_price:row.price, line_total:(row.amount!=null?row.amount:row.price),
+        })));
+        if(linesErr){
+          saveError = (saveError?saveError+" ":"") + "Invoice saved, but its line items didn't: " + linesErr.message;
+        }
+      }
+    }
+
+    setResult({mode,vendor:vendor?.name,updated,created,invoiceTotal:r2(invoiceTotal),count:parsed.length,error:saveError});
     setStep(3);setLoading(false);
   }
 
@@ -466,7 +508,8 @@ function PasteModal({vendors,orgId,onClose,onDone,initialVendorId}) {
               onDragLeave={()=>setDragOver(false)}
               onDrop={e=>{e.preventDefault();setDragOver(false);handleDroppedFiles(e.dataTransfer.files);}}
               style={{position:"relative"}}
-            ><textarea
+            >
+              <textarea
                 onDragOver={e=>{e.preventDefault();e.stopPropagation();setDragOver(true);}}
                 onDragLeave={()=>setDragOver(false)}
                 onDrop={e=>{e.preventDefault();e.stopPropagation();setDragOver(false);handleDroppedFiles(e.dataTransfer.files);}}
@@ -478,6 +521,7 @@ function PasteModal({vendors,orgId,onClose,onDone,initialVendorId}) {
                 onChange={e=>handleDroppedFiles(e.target.files)}
                 style={{marginTop:8,fontSize:12}} />
             </div>
+            {rawFile&&<div style={{fontSize:11,color:"#888",marginTop:4}}>📎 {rawFile.name} {mode==="invoice"?"— original will be saved":""}</div>}
           </div>
           <button onClick={doParse} disabled={text.length<10} style={{...btn("#003584"),width:"100%"}}>
             Parse ({text.split("\n").filter(l=>l.trim()).length} lines)
@@ -500,7 +544,7 @@ function PasteModal({vendors,orgId,onClose,onDone,initialVendorId}) {
               </div>
             ))}
           </div>
-                   {skipped.length>0&&(
+          {skipped.length>0&&(
             <div style={{background:"#FFF3E0",padding:"10px 14px",borderRadius:8,marginBottom:14,fontSize:12}}>
               <div style={{fontWeight:700,color:"#E65100",marginBottom:6}}>{skipped.length} line{skipped.length>1?"s":""} couldn't be read — skipped, not saved</div>
               <div style={{maxHeight:120,overflowY:"auto"}}>
@@ -522,11 +566,12 @@ function PasteModal({vendors,orgId,onClose,onDone,initialVendorId}) {
 
         {step===3&&result&&(
           <div style={{textAlign:"center",padding:"20px 0"}}>
-            <div style={{fontSize:40,marginBottom:12}}>✅</div>
+            <div style={{fontSize:40,marginBottom:12}}>{result.error?"⚠️":"✅"}</div>
             <h3 style={{margin:"0 0 8px"}}>{result.vendor}</h3>
             {result.mode==="pricelist"
               ?<p style={{color:"#666",fontSize:14}}>{result.updated} items updated · {result.created} new items added</p>
               :<p style={{color:"#666",fontSize:14}}>{result.count} lines · ${result.invoiceTotal?.toFixed(2)}</p>}
+            {result.error&&<div style={{background:"#FFF3E0",color:"#E65100",padding:"10px 12px",borderRadius:8,fontSize:13,marginTop:12,textAlign:"left"}}>{result.error}</div>}
             <button onClick={()=>{onDone();onClose();}} style={{...btn("#003584"),marginTop:16}}>Done</button>
           </div>
         )}
@@ -548,6 +593,7 @@ export default function App() {
   const [tab,setTab]=useState("order");
   const [showPaste,setShowPaste]=useState(false);
   const [selectedVendorId,setSelectedVendorId]=useState(null);
+  const [importMode,setImportMode]=useState("pricelist");
   const [expandedItem,setExpandedItem]=useState(null);
   const [search,setSearch]=useState("");
   const [loading,setLoading]=useState(true);
@@ -970,7 +1016,7 @@ export default function App() {
               <div style={{fontSize:36,marginBottom:8}}>📋</div>
               <h3 style={{margin:"0 0 6px"}}>Import Price List or Invoice</h3>
               <p style={{color:"#888",fontSize:13,margin:"0 0 16px"}}>Copy from email, Excel, or any format and paste it in</p>
-              <button onClick={()=>{setSelectedVendorId(null);setShowPaste(true);}} style={{...btn("#003584")}}>Open Import Tool</button>
+              <button onClick={()=>{setSelectedVendorId(null);setImportMode("pricelist");setShowPaste(true);}} style={{...btn("#003584")}}>Open Import Tool</button>
             </div>
             <div style={{background:"white",borderRadius:10,padding:16,boxShadow:"0 1px 3px rgba(0,0,0,0.08)"}}>
               <h4 style={{margin:"0 0 12px",fontSize:14}}>Your Vendors</h4>
@@ -984,7 +1030,7 @@ export default function App() {
                       <div style={{fontWeight:700,color:vc.accent}}>{v.name}</div>
                       <div style={{fontSize:11,color:"#888"}}>{count} items · Min ${v.delivery_minimum_dollar||0}</div>
                     </div>
-                    <button onClick={()=>{setSelectedVendorId(v.id);setShowPaste(true);}} style={{...btn(vc.accent,"white",{fontSize:12,padding:"6px 12px"})}}>Import</button>
+                    <button onClick={()=>{setSelectedVendorId(v.id);setImportMode("pricelist");setShowPaste(true);}} style={{...btn(vc.accent,"white",{fontSize:12,padding:"6px 12px"})}}>Import</button>
                   </div>
                 );
               })}
@@ -997,7 +1043,7 @@ export default function App() {
           <div>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
               <h3 style={{margin:0,fontSize:16}}>Invoice History</h3>
-              <button onClick={()=>{setShowPaste(true);}} style={{...btn("#003584","white",{fontSize:12,padding:"8px 14px"})}}>+ Record Invoice</button>
+              <button onClick={()=>{setSelectedVendorId(null);setImportMode("invoice");setShowPaste(true);}} style={{...btn("#003584","white",{fontSize:12,padding:"8px 14px"})}}>+ Record Invoice</button>
             </div>
             {invoices.length===0?(
               <div style={{background:"white",borderRadius:10,padding:32,textAlign:"center",boxShadow:"0 1px 3px rgba(0,0,0,0.08)"}}>
@@ -1012,14 +1058,20 @@ export default function App() {
                   <div style={{fontWeight:700,fontSize:14}}>{inv.vendors?.name||"Unknown"}</div>
                   <div style={{fontSize:11,color:"#888"}}>{inv.invoice_date||new Date(inv.created_at).toLocaleDateString()} · {inv.status}</div>
                 </div>
-                <div style={{fontWeight:800,fontSize:16}}>${parseFloat(inv.total_amount||0).toFixed(2)}</div>
+                <div style={{display:"flex",alignItems:"center",gap:10}}>
+                  <div style={{fontWeight:800,fontSize:16}}>${parseFloat(inv.total_amount||0).toFixed(2)}</div>
+                  {inv.file_path&&(
+                    <button onClick={()=>viewStoredFile(inv.file_path)}
+                      style={{...btn("#003584","white",{fontSize:11,padding:"5px 10px"})}}>View</button>
+                  )}
+                </div>
               </div>
             ))}
           </div>
         )}
       </div>
 
-      {showPaste&&<PasteModal vendors={vendors} orgId={org.id} onClose={()=>setShowPaste(false)} onDone={loadData} initialVendorId={selectedVendorId} />}
+      {showPaste&&<PasteModal vendors={vendors} orgId={org.id} onClose={()=>setShowPaste(false)} onDone={loadData} initialVendorId={selectedVendorId} initialMode={importMode} />}
     </div>
   );
 }
