@@ -31,7 +31,6 @@
 
 
 // ── Column roles we understand ─────────────────────────────────────
-// Every column in a document gets matched to one of these, or "unknown".
 const COLUMN_ROLES = {
   description: ["item", "description", "desc", "product", "name"],
   code:        ["item no", "item#", "sku", "code", "cust item no", "item number"],
@@ -88,10 +87,6 @@ function median(numbers) {
 
 
 // ── Stage 1: Sniff document structure ───────────────────────────────
-// Tries tab-split, comma-split, and multi-space-split on every line,
-// and picks whichever delimiter gives the most CONSISTENT cell count
-// across lines (a real table has the same number of columns row to
-// row; noise doesn't).
 
 function sniffDelimiter(lines) {
   const candidates = [
@@ -103,11 +98,11 @@ function sniffDelimiter(lines) {
   let best = { name: null, consistency: -1 };
 
   for (const cand of candidates) {
-    const counts = lines
-      .filter(l => cand.regex.test(l))
-      .map(l => l.split(cand.regex).length);
-    if (counts.length < 2) continue;
+    const linesWithDelim = lines.filter(l => cand.regex.test(l));
+    const coverage = linesWithDelim.length / lines.length;
+    if (coverage < 0.6) continue;
 
+    const counts = linesWithDelim.map(l => l.split(cand.regex).length);
     const modeCount = mostCommon(counts);
     const matchingRows = counts.filter(c => c === modeCount).length;
     const consistency = matchingRows / counts.length;
@@ -268,140 +263,3 @@ function extractRow(cells, columnMap) {
 
   const code = (get("code") || "").trim() || null;
   const packSize = (get("packSize") || "").trim() || null;
-  const qty = parseMoney(get("qty"));
-
-  return {
-    code,
-    description: description.slice(0, 120),
-    packSize,
-    qty: qty !== null ? qty : null,
-    price: price !== null ? price : amount,
-    amount: amount !== null ? amount : price,
-  };
-}
-
-
-// ── Freeform extraction (no reliable column delimiter) ──────────────
-
-function findMoneyTokens(line) {
-  const moneyRe = /\$?\d{1,3}(?:,\d{3})*(?:\.\d{1,2})?\b/g;
-  return [...line.matchAll(moneyRe)].map(m => ({
-    value: parseMoney(m[0]),
-    index: m.index,
-    length: m[0].length,
-  })).filter(t => t.value !== null);
-}
-
-function extractRowFreeform(line) {
-  const tokens = findMoneyTokens(line);
-  if (tokens.length === 0) return null;
-
-  const amountTok = tokens[tokens.length - 1];
-  const priceTok = tokens.length >= 2 ? tokens[tokens.length - 2] : amountTok;
-
-  if (amountTok.value <= 0 || amountTok.value > 1000000) return null;
-
-  let head = line.slice(0, priceTok.index).trim();
-
-  let qty = null;
-  const qtyMatch = head.match(/^(\d+(?:\.\d+)?)\s+/);
-  if (qtyMatch) {
-    qty = parseFloat(qtyMatch[1]);
-    head = head.slice(qtyMatch[0].length);
-  }
-
-  let code = null;
-  const codeMatch = head.match(/^([A-Z0-9\-]{3,14})\s+/);
-  if (codeMatch) {
-    code = codeMatch[1];
-    head = head.slice(codeMatch[0].length);
-  }
-
-  const description = head.trim();
-  if (description.length < 2) return null;
-
-  return {
-    code,
-    description: description.slice(0, 120),
-    packSize: null,
-    qty,
-    price: priceTok.value,
-    amount: amountTok.value,
-  };
-}
-
-
-// ── Main entry point ─────────────────────────────────────────────────
-//
-// parseDocument(text) -> {
-//   mode: "tabular" | "freeform",
-//   headerFound: boolean,
-//   columnMap: { role: columnIndex, ... },
-//   rows: [ { code, description, packSize, qty, price, amount }, ... ],
-//   skipped: [ { line, reason }, ... ]
-// }
-
-function parseDocument(text) {
-  const rawLines = text.split("\n").map(l => l.trimEnd()).filter(l => l.trim().length > 0);
-
-  const delimiter = sniffDelimiter(rawLines);
-
-  if (delimiter === null) {
-    const rows = [];
-    const skipped = [];
-    for (const line of rawLines) {
-      const cellsForJunkCheck = [line];
-      if (isJunkRow(cellsForJunkCheck)) {
-        skipped.push({ line, reason: "looks like a total/note/address line" });
-        continue;
-      }
-      const row = extractRowFreeform(line);
-      if (!row) {
-        skipped.push({ line, reason: "couldn't find a valid price or description" });
-        continue;
-      }
-      rows.push(row);
-    }
-    return { mode: "freeform", headerFound: false, columnMap: {}, rows, skipped };
-  }
-
-  const grid = rawLines.map(line => ({
-    line,
-    cells: splitRow(line, delimiter).map(cleanCell),
-  }));
-
-  const headerIndex = findHeaderRow(grid);
-  const headerFound = headerIndex !== -1;
-  const dataStart = headerFound ? headerIndex + 1 : 0;
-
-  const columnMap = fillMissingRolesFromData(
-    headerFound ? mapColumnsFromHeader(grid[headerIndex].cells) : {},
-    grid,
-    dataStart
-  );
-  const rows = [];
-  const skipped = [];
-
-  for (let i = dataStart; i < grid.length; i++) {
-    const { line, cells } = grid[i];
-
-    if (isJunkRow(cells)) {
-      skipped.push({ line, reason: "looks like a total/note/address line" });
-      continue;
-    }
-
-    const row = extractRow(cells, columnMap);
-    if (!row) {
-      skipped.push({ line, reason: "couldn't find a valid price or description" });
-      continue;
-    }
-
-    rows.push(row);
-  }
-
-  return { mode: "tabular", headerFound, columnMap, rows, skipped };
-}
-
-
-// Exported for use elsewhere in the app.
-export { parseDocument };
