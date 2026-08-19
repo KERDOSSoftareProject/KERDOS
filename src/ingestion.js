@@ -31,6 +31,7 @@
 
 
 // ── Column roles we understand ─────────────────────────────────────
+// Every column in a document gets matched to one of these, or "unknown".
 const COLUMN_ROLES = {
   description: ["item", "description", "desc", "product", "name"],
   code:        ["item no", "item#", "sku", "code", "cust item no", "item number"],
@@ -54,7 +55,7 @@ const JUNK_ROW_PATTERNS = [
   /^ship to/i,
   /^sold to/i,
   /^tel:|^fax:/i,
-  /^\*{2,}/,
+  /^\*{2,}/,                     // "*** IMPORTANT ***" style banners
   /perishable agricultural/i,
   /paca trust/i,
   /return policy/i,
@@ -87,6 +88,10 @@ function median(numbers) {
 
 
 // ── Stage 1: Sniff document structure ───────────────────────────────
+// Tries tab-split, comma-split, and multi-space-split on every line,
+// and picks whichever delimiter gives the most CONSISTENT cell count
+// across lines (a real table has the same number of columns row to
+// row; noise doesn't).
 
 function sniffDelimiter(lines) {
   const candidates = [
@@ -99,6 +104,9 @@ function sniffDelimiter(lines) {
 
   for (const cand of candidates) {
     const linesWithDelim = lines.filter(l => cand.regex.test(l));
+    // A real table uses this delimiter on most lines, not just a
+    // scattered few (a handful of junk lines with incidental double
+    // spaces shouldn't be mistaken for a whole tabular document).
     const coverage = linesWithDelim.length / lines.length;
     if (coverage < 0.6) continue;
 
@@ -112,6 +120,11 @@ function sniffDelimiter(lines) {
     }
   }
 
+  // No reliable tabular delimiter — this is typical of text pulled out
+  // of a PDF, where columns are just single spaces apart with no
+  // consistent structure. We deliberately return null rather than
+  // forcing a bad split; the caller switches to "freeform" mode instead
+  // of pretending this is a table.
   if (best.consistency < 0.5) return null;
   return best.name;
 }
@@ -136,14 +149,21 @@ function cleanCell(cell) {
 
 
 // ── Stage 2: Find the header row ────────────────────────────────────
+// Scores each of the first several rows on how "header-like" it is:
+// mostly text, contains recognized header words, and its column count
+// matches the most common column count in the document (meaning it's
+// structurally part of the table, not a stray title line).
 
 function scoreHeaderRow(cells, modeColumnCount) {
   if (cells.length < 2) return 0;
 
   let score = 0;
 
+  // Structural fit: does this row have the same number of columns
+  // as most other rows in the document?
   if (cells.length === modeColumnCount) score += 3;
 
+  // Keyword match: how many cells look like known header words?
   const allKeywords = Object.values(COLUMN_ROLES).flat();
   const keywordHits = cells.filter(cell => {
     const lower = cell.toLowerCase().trim();
@@ -151,6 +171,7 @@ function scoreHeaderRow(cells, modeColumnCount) {
   }).length;
   score += keywordHits * 2;
 
+  // Text-heaviness: headers are mostly words, not numbers.
   const numericCells = cells.filter(c => parseMoney(c) !== null).length;
   if (numericCells === 0) score += 1;
 
@@ -169,6 +190,8 @@ function findHeaderRow(grid) {
     if (score > best.score) best = { index: i, score };
   }
 
+  // Require a minimum score so we don't mistake a random line for
+  // a header when the document genuinely has none.
   return best.score >= 4 ? best.index : -1;
 }
 
@@ -176,11 +199,11 @@ function findHeaderRow(grid) {
 // ── Stage 3: Map columns to roles ───────────────────────────────────
 
 function mapColumnsFromHeader(headerCells) {
-  const map = {};
+  const map = {}; // role -> column index
   headerCells.forEach((cell, idx) => {
     const lower = cell.toLowerCase().trim();
     for (const [role, keywords] of Object.entries(COLUMN_ROLES)) {
-      if (map[role] !== undefined) continue;
+      if (map[role] !== undefined) continue; // first match wins
       if (keywords.some(kw => lower === kw || lower.includes(kw))) {
         map[role] = idx;
       }
@@ -189,6 +212,14 @@ function mapColumnsFromHeader(headerCells) {
   return map;
 }
 
+// Profiles each column's DATA (rather than its header text) to guess
+// its role, based on shape: how numeric it is, how long the text is,
+// etc. Used in two situations:
+//   - no header row exists at all
+//   - a header row exists, but its label doesn't match any known word
+//     (e.g. Excel's generic "Column2" instead of "Price") — in that
+//     case we only use this to fill in whatever roles are still
+//     missing, not to override roles we already matched by name.
 function profileColumns(grid, dataStartIndex) {
   const dataRows = grid.slice(dataStartIndex);
   const columnCount = mostCommon(dataRows.map(r => r.cells.length));
@@ -225,14 +256,16 @@ function profileColumns(grid, dataStartIndex) {
   return map;
 }
 
+// Fills in any role the header-text pass didn't find, using the data
+// profile — without overwriting anything already matched by name.
 function fillMissingRolesFromData(columnMap, grid, dataStartIndex) {
   const usedColumns = new Set(Object.values(columnMap));
   const dataProfile = profileColumns(grid, dataStartIndex);
 
   const filled = { ...columnMap };
   for (const [role, col] of Object.entries(dataProfile)) {
-    if (filled[role] !== undefined) continue;
-    if (usedColumns.has(col)) continue;
+    if (filled[role] !== undefined) continue;   // already matched by header text
+    if (usedColumns.has(col)) continue;          // column already claimed by another role
     filled[role] = col;
     usedColumns.add(col);
   }
@@ -250,9 +283,12 @@ function extractRow(cells, columnMap) {
   const price = parseMoney(priceRaw);
   const amount = parseMoney(amountRaw);
 
+  // A row needs at least one valid money value to be usable.
   if (price === null && amount === null) return null;
 
   let description = (get("description") || "").trim();
+  // If we don't know which column is the description, fall back to
+  // the longest non-numeric cell in the row.
   if (!description) {
     description = cells
       .filter(c => parseMoney(c) === null)
@@ -263,3 +299,246 @@ function extractRow(cells, columnMap) {
 
   const code = (get("code") || "").trim() || null;
   const packSize = (get("packSize") || "").trim() || null;
+  const qty = parseMoney(get("qty"));
+
+  return {
+    code,
+    description: description.slice(0, 120),
+    packSize,
+    qty: qty !== null ? qty : null,
+    price: price !== null ? price : amount,
+    amount: amount !== null ? amount : price,
+  };
+}
+
+
+// ── Freeform extraction (no reliable column delimiter) ──────────────
+// PDF text commonly comes out as single-space-separated words with no
+// consistent column structure — "6 GREENLEAF LETTUCE GREENLEAF 24CT
+// (USA) 23.00 138.00" — a real table, but not one a delimiter can
+// split cleanly. Instead of forcing it into fake columns, we read each
+// line by its actual shape: numbers at the end are price/amount, an
+// optional short code near the start, everything else is the
+// description.
+
+function findMoneyTokens(line) {
+  const moneyRe = /\$?\d{1,3}(?:,\d{3})*(?:\.\d{1,2})?\b/g;
+  return [...line.matchAll(moneyRe)].map(m => ({
+    value: parseMoney(m[0]),
+    index: m.index,
+    length: m[0].length,
+  })).filter(t => t.value !== null);
+}
+
+function extractRowFreeform(line) {
+  const tokens = findMoneyTokens(line);
+  if (tokens.length === 0) return null;
+
+  // The rightmost money-looking number is the line total; the one
+  // before it (if present) is the unit price. A lone number is
+  // treated as the price.
+  const amountTok = tokens[tokens.length - 1];
+  const priceTok = tokens.length >= 2 ? tokens[tokens.length - 2] : amountTok;
+
+  if (amountTok.value <= 0 || amountTok.value > 1000000) return null;
+
+  // Everything before the price token is candidate description text.
+  let head = line.slice(0, priceTok.index).trim();
+
+  // Strip a leading quantity, e.g. "6 GREENLEAF LETTUCE..." -> qty=6
+  let qty = null;
+  const qtyMatch = head.match(/^(\d+(?:\.\d+)?)\s+/);
+  if (qtyMatch) {
+    qty = parseFloat(qtyMatch[1]);
+    head = head.slice(qtyMatch[0].length);
+  }
+
+  // Strip a leading item code, e.g. "GREENLEAF LETTUCE GREENLEAF..."
+  // A code looks like a short all-caps/alphanumeric token immediately
+  // followed by more descriptive text.
+  let code = null;
+  const codeMatch = head.match(/^([A-Z0-9\-]{3,14})\s+/);
+  if (codeMatch) {
+    code = codeMatch[1];
+    head = head.slice(codeMatch[0].length);
+  }
+
+  const description = head.trim();
+  if (description.length < 2) return null;
+
+  return {
+    code,
+    description: description.slice(0, 120),
+    packSize: null,
+    qty,
+    price: priceTok.value,
+    amount: amountTok.value,
+  };
+}
+
+
+// Some PDFs place an item's code, or the tail end of a wrapped
+// description, on its own line — visually part of the same row, but
+// positioned slightly differently so our line-grouping sees it as
+// separate. Before extracting rows, we merge any short, price-less
+// line into the row it visually belongs to: any such "orphan" line
+// appearing between one priced line and the next belongs to the row
+// that came before it.
+function mergeOrphanLines(lines) {
+  const merged = [];
+  let pendingBase = null;
+  let pendingExtras = [];
+
+  const flush = () => {
+    if (pendingBase !== null) {
+      merged.push([pendingBase, ...pendingExtras].join(" "));
+      pendingBase = null;
+      pendingExtras = [];
+    }
+  };
+
+  for (const line of lines) {
+    const hasMoney = findMoneyTokens(line).length > 0;
+    const junk = isJunkRow([line]);
+
+    if (junk) {
+      flush();
+      merged.push(line); // pass through untouched; filtered downstream
+    } else if (hasMoney) {
+      flush();
+      pendingBase = line;
+    } else if (pendingBase !== null) {
+      pendingExtras.push(line); // orphan text belongs to the pending row
+    } else {
+      merged.push(line); // no row to attach to; left as-is
+    }
+  }
+  flush();
+  return merged;
+}
+
+
+// Even free-flowing PDF text usually has a real header line somewhere
+// ("Qty Item no Description Price Amount") and a clear end ("Total",
+// "Signature", disclaimers). We find both boundaries first, so we only
+// ever extract from inside the actual item table — never from invoice
+// numbers, phone numbers, zip codes, or footer text that happen to
+// contain digits.
+function findFreeformHeaderIndex(lines) {
+  const allKeywords = Object.values(COLUMN_ROLES).flat();
+  const searchLimit = Math.min(lines.length, 20);
+  for (let i = 0; i < searchLimit; i++) {
+    const lower = lines[i].toLowerCase();
+    const hits = allKeywords.filter(kw => lower.includes(kw)).length;
+    if (hits >= 3) return i;
+  }
+  return -1;
+}
+
+
+// ── Main entry point ─────────────────────────────────────────────────
+//
+// parseDocument(text) -> {
+//   headerFound: boolean,
+//   columnMap: { role: columnIndex, ... },
+//   rows: [ { code, description, packSize, qty, price, amount }, ... ],
+//   skipped: [ { line, reason }, ... ]   // for transparency in the review UI
+// }
+
+function parseDocument(text) {
+  const rawLines = text.split("\n").map(l => l.trimEnd()).filter(l => l.trim().length > 0);
+
+  const delimiter = sniffDelimiter(rawLines);
+
+  // ── FREEFORM MODE ──
+  // No reliable column delimiter was found (typical of PDF-extracted
+  // text). Read each line by its shape instead of forcing fake columns.
+  if (delimiter === null) {
+    const headerIdx = findFreeformHeaderIndex(rawLines);
+    const dataStart = headerIdx !== -1 ? headerIdx + 1 : 0;
+
+    // Find where the item table ends: the first clearly-junk line
+    // after data starts (Total, Signature, disclaimers, etc). Once
+    // we hit that, we stop entirely — footer paragraphs sometimes
+    // contain stray numbers too, and we don't want those mistaken
+    // for items.
+    let dataEnd = rawLines.length;
+    for (let i = dataStart; i < rawLines.length; i++) {
+      if (isJunkRow([rawLines[i]])) { dataEnd = i; break; }
+    }
+
+    const beforeCount = dataStart;
+    const afterCount = rawLines.length - dataEnd;
+    const itemLines = rawLines.slice(dataStart, dataEnd);
+    const mergedLines = mergeOrphanLines(itemLines);
+
+    const rows = [];
+    const skipped = [];
+    for (const line of mergedLines) {
+      if (isJunkRow([line])) {
+        skipped.push({ line, reason: "looks like a total/note/address line" });
+        continue;
+      }
+      const row = extractRowFreeform(line);
+      if (!row) {
+        skipped.push({ line, reason: "couldn't find a valid price or description" });
+        continue;
+      }
+      rows.push(row);
+    }
+    if (beforeCount > 0) {
+      skipped.unshift({ line: `(${beforeCount} header/address lines before the item table)`, reason: "outside the item table" });
+    }
+    if (afterCount > 0) {
+      skipped.push({ line: `(${afterCount} footer/note lines after the item table)`, reason: "outside the item table" });
+    }
+    return { mode: "freeform", headerFound: headerIdx !== -1, columnMap: {}, rows, skipped };
+  }
+
+  // ── TABULAR MODE ──
+  // A real, consistent delimiter was found — treat this as a proper
+  // table with columns.
+  const grid = rawLines.map(line => ({
+    line,
+    cells: splitRow(line, delimiter).map(cleanCell),
+  }));
+
+  const headerIndex = findHeaderRow(grid);
+  const headerFound = headerIndex !== -1;
+  const dataStart = headerFound ? headerIndex + 1 : 0;
+
+  // Start with whatever the header text tells us (most reliable when
+  // it's clearly labeled), then use the actual column data to fill in
+  // any role the header didn't clearly name — covers both "no header
+  // at all" and "header exists but is mislabeled" (e.g. "Column2").
+  const columnMap = fillMissingRolesFromData(
+    headerFound ? mapColumnsFromHeader(grid[headerIndex].cells) : {},
+    grid,
+    dataStart
+  );
+  const rows = [];
+  const skipped = [];
+
+  for (let i = dataStart; i < grid.length; i++) {
+    const { line, cells } = grid[i];
+
+    if (isJunkRow(cells)) {
+      skipped.push({ line, reason: "looks like a total/note/address line" });
+      continue;
+    }
+
+    const row = extractRow(cells, columnMap);
+    if (!row) {
+      skipped.push({ line, reason: "couldn't find a valid price or description" });
+      continue;
+    }
+
+    rows.push(row);
+  }
+
+  return { mode: "tabular", headerFound, columnMap, rows, skipped };
+}
+
+
+// Exported for use elsewhere in the app.
+export { parseDocument };
