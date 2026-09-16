@@ -1,0 +1,23 @@
+{
+  "name": "kerdos",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "node regression.mjs && node session-test.mjs"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.57.4",
+    "pdfjs-dist": "3.11.174",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "xlsx": "0.18.5"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "vite": "^5.4.14"
+  }
+}
